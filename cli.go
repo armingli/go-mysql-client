@@ -90,6 +90,8 @@ func (c *Cli) Run(execute ...string) error {
 	return nil
 }
 
+var pattern = regexp.MustCompile(`^(SELECT|select).*\\G;?`)
+
 func (c *Cli) executor(in string) {
 	in = strings.TrimSpace(in)
 	blocks := strings.Split(in, " ")
@@ -99,6 +101,11 @@ func (c *Cli) executor(in string) {
 		os.Exit(0)
 	default:
 		q := in
+		hasG := false
+		if pattern.Match([]byte(q)) {
+			hasG = true
+			q = strings.ReplaceAll(q, "\\G", "")
+		}
 		if _, err := sqlparser.Parse(q); err != nil {
 			fmt.Println(err)
 			return
@@ -108,6 +115,7 @@ func (c *Cli) executor(in string) {
 			fmt.Println(err)
 			return
 		}
+		results.GFormat = hasG
 		fmt.Println(results.String())
 		return
 	}
@@ -181,13 +189,38 @@ func QueriesFromReader(r io.Reader) []string {
 type Results struct {
 	Columns []string
 	Rows    [][]string
+	GFormat bool
 }
 
 func (r *Results) String() string {
 	buf := bytes.NewBufferString("")
-	table := tablewriter.NewWriter(buf)
-	table.SetHeader(r.Columns)
-	table.AppendBulk(r.Rows)
-	table.Render()
+	if r.GFormat {
+		r.G(buf)
+	} else {
+		table := tablewriter.NewWriter(buf)
+		table.SetHeader(r.Columns)
+		table.AppendBulk(r.Rows)
+		table.Render()
+	}
+
 	return buf.String()
+}
+
+const rowSep = "*************************** %d. row ***************************\n"
+
+func (r *Results) G(buf *bytes.Buffer) {
+	longestColName := 0
+	for _, c := range r.Columns {
+		if len(c) > longestColName {
+			longestColName = len(c)
+		}
+	}
+	rowFormat := fmt.Sprintf("%%%ds: %%s\n", longestColName)
+	for i, row := range r.Rows {
+		buf.WriteString(fmt.Sprintf(rowSep, i+1))
+		for c, col := range r.Columns {
+			buf.WriteString(fmt.Sprintf(rowFormat, col, row[c]))
+		}
+	}
+	buf.WriteString(fmt.Sprintf("\n%d rows in set", len(r.Rows)))
 }
